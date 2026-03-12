@@ -33,6 +33,9 @@ ENV/
 *.mp3
 *.wav
 
+# other formats
+*.pdf
+
 # IDEs
 .vscode/
 .idea/

@@ -54,6 +54,7 @@ def _record_worker(device_id: str, filename: str, sample_rate: int, is_loopback:
     import soundcard as sc
     import lameenc
     import os
+    import traceback
 
     # Resolve device
     try:
@@ -111,7 +112,7 @@ def _record_worker(device_id: str, filename: str, sample_rate: int, is_loopback:
     except Exception as e:
         # Ignore errors during process termination
         if not stop_event.is_set():
-            print(f"[{d_name}] Erro na gravacao: {e}")
+            print(f"\n[{d_name}] Erro na gravacao:\n{traceback.format_exc()}")
     finally:
         # Crucial for Windows: force hard exit to release all native resources
         os._exit(0)
@@ -186,14 +187,24 @@ class RecordingSession:
         except KeyboardInterrupt:
             print("\n\nParando gravacao...")
             stop_event.set()
-            # Immediate termination to stop blocking record calls
+            
+            # Allow time for workers to flush MP3 and exit gracefully
+            # We wait up to 2 seconds for clean exit
+            import time
+            start_wait = time.time()
+            while time.time() - start_wait < 2.0:
+                if not any(proc.is_alive() for _, proc, _ in processes):
+                    break
+                time.sleep(0.1)
+
+            # Hard termination only for processes that refuse to die
             for _, proc, _ in processes:
                 if proc.is_alive():
+                    # print(f"  Finalizando {label} forcadamente...")
                     proc.terminate()
             
-            # Wait briefly for files to be closed
-            import time
-            time.sleep(0.5)
+            # Brief delay to ensure OS releases file handles
+            time.sleep(0.3)
 
         # Report results
         print("\n--- Resultado ---")
