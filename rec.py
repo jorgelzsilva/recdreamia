@@ -13,9 +13,10 @@ class AppConfig(BaseModel):
     sample_rate: int = Field(default=44100, gt=0, description="Sample rate for recording")
     file_mic: str = Field(default="gravacao_microfone.mp3")
     file_sys: str = Field(default="gravacao_sistema.mp3")
+    file_out: str = Field(default="gravacao.mp3", description="Single merged output file")
     system_only: bool = Field(default=False, description="Record only system audio")
 
-    @field_validator('file_mic', 'file_sys')
+    @field_validator('file_mic', 'file_sys', 'file_out')
     @classmethod
     def validate_extension(cls, v: str) -> str:
         if not v.endswith('.mp3'):
@@ -31,6 +32,7 @@ def load_config(system_only: bool = False) -> AppConfig:
         sample_rate=int(os.environ.get("RECORDING_SAMPLE_RATE", 44100)),
         file_mic=os.environ.get("RECORDING_FILE_MIC", "gravacao_microfone.mp3"),
         file_sys=os.environ.get("RECORDING_FILE_SYS", "gravacao_sistema.mp3"),
+        file_out=os.environ.get("RECORDING_FILE_OUT", "gravacao.mp3"),
         system_only=system_only,
     )
 
@@ -116,6 +118,89 @@ def _record_worker(device_id: str, filename: str, sample_rate: int, is_loopback:
     finally:
         # Crucial for Windows: force hard exit to release all native resources
         os._exit(0)
+
+
+# --- Post-processing (mix two streams into a single file) ---
+def _load_mono(filename: str):
+    """Decodes an MP3 to a mono float32 array. Returns (samples, sample_rate)."""
+    import soundfile as sf
+
+    data, sr = sf.read(filename, dtype='float32', always_2d=True)
+    # Downmix any channel layout to a single mono track
+    mono = data.mean(axis=1)
+    return mono, sr
+
+
+def _encode_mono_mp3(samples, sample_rate: int, filename: str):
+    """Encodes a mono float32 array to an MP3 file using lameenc."""
+    import lameenc
+
+    encoder = lameenc.Encoder()
+    encoder.set_bit_rate(128)
+    encoder.set_in_sample_rate(sample_rate)
+    encoder.set_channels(1)
+    encoder.set_quality(2)
+
+    pcm_data = (samples * 32767).astype(numpy.int16).tobytes()
+    with open(filename, 'wb') as mp3_file:
+        mp3_file.write(encoder.encode(pcm_data))
+        mp3_file.write(encoder.flush())
+
+
+def _merge_to_single(file_sys: str, file_mic: str, file_out: str):
+    """Mixes the system and microphone recordings into a single mono MP3.
+
+    Keeps the dual-process recording architecture intact and merges only at the
+    end. Decodes both MP3s, downmixes to mono, pads the shorter track with
+    silence, sums them (scaling down if the peak would clip), then re-encodes a
+    single mono MP3. The two intermediate files are removed only after the
+    merged file is successfully written.
+    """
+    # Collect the sources that actually exist (a stream may have failed).
+    sources = [f for f in (file_sys, file_mic) if f and os.path.exists(f) and os.path.getsize(f) > 0]
+    if not sources:
+        print("Nenhum arquivo de audio disponivel para gerar o arquivo unico.")
+        return
+
+    print("\nGerando arquivo unico...")
+    try:
+        tracks = []
+        sample_rate = None
+        for src in sources:
+            mono, sr = _load_mono(src)
+            sample_rate = sr  # both streams share the configured sample rate
+            tracks.append(mono)
+
+        # Pad shorter tracks to the longest length (minor start/stop offset).
+        max_len = max(len(t) for t in tracks)
+        padded = [numpy.pad(t, (0, max_len - len(t))) for t in tracks]
+
+        mixed = numpy.sum(padded, axis=0)
+
+        # Prevent clipping: scale down if the summed peak exceeds full scale.
+        peak = numpy.max(numpy.abs(mixed)) if mixed.size else 0.0
+        if peak > 1.0:
+            mixed = mixed / peak
+
+        _encode_mono_mp3(mixed, sample_rate, file_out)
+    except Exception:
+        import traceback
+        print("Falha ao gerar o arquivo unico (arquivos separados preservados):")
+        print(traceback.format_exc())
+        return
+
+    # Only remove the intermediate files once the merged file exists.
+    if os.path.exists(file_out) and os.path.getsize(file_out) > 0:
+        for src in sources:
+            if os.path.abspath(src) == os.path.abspath(file_out):
+                continue
+            try:
+                os.remove(src)
+            except OSError:
+                pass
+        print(f"Arquivo final: {file_out}")
+    else:
+        print("Arquivo unico nao foi gravado; arquivos separados preservados.")
 
 
 # --- Orchestration ---
@@ -215,6 +300,11 @@ class RecordingSession:
             else:
                 print(f"  {label}: FALHOU (exit code {proc.exitcode})")
         print("-" * 31)
+
+        # Merge the recorded streams into a single mono MP3 for transcription.
+        # In --system_only mode only the system file exists; it is re-encoded
+        # to the single output and the intermediate is removed.
+        _merge_to_single(self.config.file_sys, self.config.file_mic, self.config.file_out)
 
 
 # --- CLI ---

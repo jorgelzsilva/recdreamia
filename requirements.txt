@@ -1,5 +1,6 @@
 annotated-types==0.7.0
 cffi==2.0.0
+lameenc==1.8.2
 numpy==2.4.3
 pycparser==3.0
 pydantic==2.12.5

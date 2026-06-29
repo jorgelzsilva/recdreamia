@@ -1,14 +1,16 @@
 # RecDreamia
 
-RecDreamia is a professional-grade audio recording application designed to capture dual-stream audio. It record both system audio (loopback) and microphone audio simultaneously, encoding them directly into MP3 files using high-performance multiprocessing.
+RecDreamia is a professional-grade audio recording application designed to capture dual-stream audio. It records both system audio (loopback) and microphone audio simultaneously, then merges them into a **single mono MP3 file** ready for transcription.
 
 ## 🚀 Key Features
 
-- **Dual-Stream Recording**: Capture system audio and microphone into separate MP3 files.
+- **Single Merged Output**: System and microphone audio are recorded in parallel and automatically mixed into one mono MP3 (`gravacao.mp3`), so transcription only needs to process a single file.
 - **Real-Time MP3 Encoding**: Uses the `lameenc` library for efficient, high-quality encoding.
-- **Multiprocessing Isolation**: Each recording stream runs in its own process, ensuring stability and preventing native crashes on Windows.
+- **Multiprocessing Isolation**: Each recording stream runs in its own process, ensuring stability and preventing native crashes on Windows. The two streams are merged in a post-processing step after recording stops.
 - **Resilient Architecure**: Implements "Crash Early" principles with robust configuration validation.
 - **Configurable**: Easily adjust sample rates and filenames via environment variables or CLI flags.
+
+> The microphone and system streams are written to temporary MP3 files during recording (`gravacao_microfone.mp3` / `gravacao_sistema.mp3`). Once recording stops they are mixed into the single output file and removed.
 
 ## 🏗️ Technical Architecture
 
@@ -90,7 +92,11 @@ You can customize the recording behavior by creating a `.env` file in the root d
 RECORDING_SAMPLE_RATE=44100
 RECORDING_FILE_MIC=gravacao_microfone.mp3
 RECORDING_FILE_SYS=gravacao_sistema.mp3
+RECORDING_FILE_OUT=gravacao.mp3
 ```
+
+- `RECORDING_FILE_MIC` / `RECORDING_FILE_SYS`: temporary per-stream files (removed after merging).
+- `RECORDING_FILE_OUT`: the final single mono MP3 used for transcription.
 
 ## 📝 License
 
